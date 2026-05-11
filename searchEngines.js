@@ -3,6 +3,20 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
+function decodeBingCkUrl(href) {
+  try {
+    if (!href || !href.includes("bing.com/ck/a")) return href;
+    const u = new URL(href).searchParams.get("u");
+    if (!u || !u.startsWith("a1")) return href;
+    let b64 = u.slice(2).replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    const decoded = Buffer.from(b64, "base64").toString("utf8");
+    return /^https?:\/\//i.test(decoded) ? decoded : href;
+  } catch {
+    return href;
+  }
+}
+
 async function googleSearch(query) {
   const browser = await puppeteer.launch({ headless: "new" });
   try {
@@ -59,25 +73,27 @@ async function bingSearch(query) {
       `https://www.bing.com/search?form=QBRE&q=${encodeURIComponent(query)}&cc=US`,
       { waitUntil: 'networkidle2' }
     );
-    await page.waitForSelector('#b_results .b_algo');
+    await page.waitForSelector('#b_results li.b_algo');
     const summaries = await page.evaluate(() => {
       const liElements = Array.from(
-        document.querySelectorAll("#b_results > .b_algo")
+        document.querySelectorAll("#b_results > li.b_algo")
       );
-      const firstFiveLiElements = liElements.slice(0, 10);
-      return firstFiveLiElements.map((li) => {
-        const abstractElement = li.querySelector(".b_caption > p");
-        const linkElement = li.querySelector("a");
-        const href = linkElement.getAttribute("href");
-        const title = linkElement.textContent;
+      return liElements.slice(0, 20).map((li) => {
+        const linkElement = li.querySelector("h2 a");
+        const href = linkElement ? linkElement.getAttribute("href") : "";
+        const title = linkElement ? linkElement.textContent : "";
 
-        const abstract = abstractElement ? abstractElement.textContent : "";
+        const abstractElement =
+          li.querySelector(".b_caption > p") ||
+          li.querySelector(".b_caption .b_lineclamp1, .b_caption .b_lineclamp2, .b_caption .b_lineclamp3, .b_caption .b_lineclamp4") ||
+          li.querySelector(".b_caption");
+        const abstract = abstractElement ? abstractElement.textContent.trim() : "";
+
         return { href, title, abstract };
       });
     });
     await browser.close();
-    // console.log(summaries);
-    return summaries;
+    return summaries.map((r) => ({ ...r, href: decodeBingCkUrl(r.href) }));
   } catch (error) {
     console.error("An error occurred:", error);
   } finally {
@@ -98,18 +114,23 @@ async function yahooSearch(query) {
     await page.waitForSelector(".searchCenterMiddle");
     const summaries = await page.evaluate(() => {
       const liElements = Array.from(
-        document.querySelector(".searchCenterMiddle").childNodes
+        document.querySelectorAll(".searchCenterMiddle > li")
       );
-      const firstFiveLiElements = liElements.slice(0, 10);
-      return firstFiveLiElements.map((li) => {
+      const results = [];
+      for (const li of liElements) {
+        const h3 = li.querySelector("h3");
+        if (!h3) continue;
+        const linkElement = h3.closest("a") || li.querySelector("a:has(h3)");
+        if (!linkElement) continue;
+        const href = linkElement.getAttribute("href") || "";
+        if (!href || /search\.yahoo\.com\/search|images\.search\.yahoo\.com/.test(href)) continue;
+        const title = h3.textContent.trim();
         const compTextElement = li.querySelector(".compText");
-        const linkElement = li.querySelector("a");
-        const href = linkElement.getAttribute("href");
-        const title = linkElement.getAttribute("aria-label");
-
-        const abstract = compTextElement ? compTextElement.textContent : "";
-        return { href, title, abstract };
-      });
+        const abstract = compTextElement ? compTextElement.textContent.trim() : "";
+        results.push({ href, title, abstract });
+        if (results.length >= 20) break;
+      }
+      return results;
     });
     await browser.close();
     return summaries;
@@ -137,7 +158,7 @@ async function duckduckgoSearch(query) {
       const liElements = Array.from(
         document.querySelectorAll("ol.react-results--main > li")
       );
-      const firstFiveLiElements = liElements.slice(0, 10);
+      const firstFiveLiElements = liElements.slice(0, 20);
       return firstFiveLiElements.map((li) => {
         const abstractElement = li
           .querySelector('div[data-result="snippet"]');
