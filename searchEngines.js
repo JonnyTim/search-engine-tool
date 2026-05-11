@@ -11,7 +11,9 @@ function decodeBingCkUrl(href) {
     let b64 = u.slice(2).replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
     const decoded = Buffer.from(b64, "base64").toString("utf8");
-    return /^https?:\/\//i.test(decoded) ? decoded : href;
+    if (/^https?:\/\//i.test(decoded)) return decoded;
+    if (decoded.startsWith("/")) return "https://www.bing.com" + decoded;
+    return href;
   } catch {
     return href;
   }
